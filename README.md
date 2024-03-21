@@ -1,3 +1,3 @@
-ecco_stuff_v20 is the latest version of the circulation PINN which includes both the PINN itself as well as code to produce plots of the velocity prediction in a 3d box
-momentum equations still have to be finalized 
-ecco_stuff_v21 contains the newest form of the equations, but the rest of the PINN is the same
+ecco_stuff_v17 is the NEWEST version of the code which contains both the correct momentum equations and also inputs using lat/lon instead of xy
+tracer equations in ecco_stuff_v17 still have to be finalized, but the diffusivity coefficients have been initialized such that Kx, Ky = 1e3 and Kz = 1e-5
+no validation set has yet been incorporated into the model, 3d plot of the cube ocean still has to be modified to be a colormap instead of contour plot
