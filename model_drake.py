@@ -676,12 +676,12 @@ if __name__ == "__main__":
 
     # model = PhysicsInformedNN(inputs_train, char_train, lb_train, col_train, inputs_val, layers, f_col, 0.1)
     model = PhysicsInformedNN(inputs_train, char_train, lb_train, inputs_test[:,0:4].squeeze(), inputs_val, layers, f_test, 0.1)
-    nIter = 10000 # number of Adams optimizer training iterations
+    nIter = 5000 # number of Adams optimizer training iterations
     losses, eq_losses, data_losses, val_losses, temp_losses, salt_losses, eq_res, u_t, uu_x, vu_y, wu_z, fv, p_x, u_predictions = model.train(nIter)  # original niter is 200000
 
     ## SAVING THE MODEL
-    ckpt_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/mega-runs/latlon_k2037_j5070_i200240_iter150000_layer20_gamma10_drake.ckpt"
-    array_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/mega-runs/latlon_k2037_j5070_i200240_iter150000_layer20_gamma10_drake.npz"
+    ckpt_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/mega-runs/latlon_k2037_j5070_i200240_iter150000_layer20_gamma10_drake3.ckpt"
+    array_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/mega-runs/latlon_k2037_j5070_i200240_iter150000_layer20_gamma10_drake3.npz"
 
     model.save_model(ckpt_file)
     np.savez(array_file, inputs_train=inputs_train, char_train=char_train, lb_train=lb_train, f_test = f_test, inputs_val = inputs_val, coords_val = coords_val, inputs_test = inputs_test, char_test = char_test, lb_test = lb_test, subset_template = subset_template, layers=layers, coords_test=coords_test, data_losses=data_losses, eq_losses=eq_losses, val_losses = val_losses, losses=losses, eq_res=eq_res, u_t=u_t, uu_x=uu_x, vu_y=vu_y, wu_z=wu_z, fv=fv, p_x=p_x, u_predictions=u_predictions)
