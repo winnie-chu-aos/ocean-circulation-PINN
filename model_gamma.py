@@ -24,21 +24,27 @@ from scipy.interpolate import interpn
 from scipy.interpolate import griddata
 from scipy.interpolate import LinearNDInterpolator
 import argparse
+import os
+idx = int(os.environ["SLURM_ARRAY_TASK_ID"])
+parameters = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 parser = argparse.ArgumentParser(description="Script to adjust gamma, filename, and training")
 
-# Step 2: Add arguments
-parser.add_argument("-g", "--gamma", type=float, required=True, default=0.1, help="Equation weighting")
+# # Step 2: Add arguments
+# parser.add_argument("-g", "--gamma", type=float, required=False, default=0.1, help="Equation weighting")
 parser.add_argument("-r", "--run", type=int, required=True, help="Run")
-parser.add_argument("-t", "--training", type=int, required=True, default=1, help="Training percent")
+parser.add_argument("-t", "--training", type=int, required=False, default=5, help="Training percent")
 
-# Step 3: Parse arguments
+# # Step 3: Parse arguments
 args = parser.parse_args()
 
 # Step 4: Access the values
-gamma_input = args.gamma
+gamma_input = parameters[idx]
 run_input = args.run
-training_input = args.training
+train_input = args.training
+
+np.random.seed(1000+run_input)
+tf.set_random_seed(1000+run_input)
 
 # LOADING IN ECCO GRID + DATA
 
@@ -61,7 +67,7 @@ xgcm_grid = ecco.get_llc_grid(ecco_grid)
 # interpolate w velocity onto regular grid
 WVELMASS_interp = xgcm_grid.interp(ds.WVELMASS, "Z", boundary='fill')
 # adjusting the pressure anomaly to not be 1/rho
-PHI = ds.PHIHYD*(ds.RHOAnoma+1029) # rho_const = 1029
+PHI = ds.PHIHYD*(1029) # rho_const = 1029
 # creating land mask
 maskC = ds.SALT.where(np.logical_or(ds.SALT.isnull(), ds.SALT==0),1).isel(time=0)
 
@@ -70,18 +76,22 @@ ds = xr.merge([ds, WVELMASS_interp.rename('WVELMASS_interp'), PHI.rename('PHI'),
 
 # DATA PREPROCESSING (with Navier Stokes normalization)
 # gets the index of the array for each dimension before flattening
+# DATA PREPROCESSING (with Navier Stokes normalization)
+
+# gets the index of the array for each dimension before flattening
 def using_multiindex(A, columns):
     shape = A.shape
     index = pd.MultiIndex.from_product([range(s) for s in shape], names=columns)
     df = pd.DataFrame({'A': A.flatten()}, index=index).reset_index()
     return df
 
-def make_nninputs(ds, tags, time_ind, depth_ind, j_ind, i_ind, N_train):
+def make_nninputs(ds, tags, time_ind, depth_ind, j_ind, i_ind, N_train, noise):
     # ds is the main ecco data array
     # tags is a list of strings corresponding to the input variables i.e. ['THETA','SALT', ...]
         # first tagged variable must be in 4d, others can be in 3d
     # tile_ind, depth_ind, j_ind, and i_ind are tuples for subsetted data
     # N_train is a number between 0 and 100 describing percentage of data sampled
+    # noise is the percent Gaussian noise you would like to incorporate, must be integer, ex: 1 for 1% Gaussian noise
     # returns inputs_nn which is an array of all the training data of size N points x [time, depth, lat, lon, tags...]
     # returns coords_nn which is an array of all the training data coordinates of size N points x [time, k, j, i]
     
@@ -100,6 +110,8 @@ def make_nninputs(ds, tags, time_ind, depth_ind, j_ind, i_ind, N_train):
     
     for tag in tags:
         throwaway = ds[tag].where(ds.maskC).isel(time=slice(*time_ind),k=slice(*depth_ind),j=slice(*j_ind),i=slice(*i_ind)).squeeze().values.flatten()[train_idx,np.newaxis]
+        if noise>0:
+            throwaway = throwaway + noise/100*np.std(throwaway)*np.random.randn(throwaway.shape[0], throwaway.shape[1])
         inputs_nn = np.concatenate((inputs_nn, throwaway),axis=1)
 
     inputs_nn = inputs_nn[:,1:] # need to remove the first dummy variable
@@ -153,10 +165,12 @@ i_ind = (40,70)
 
 # testing dataset
 with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-    subset_template, inputs_test, coords_test, char_test, lb_test = make_nninputs(ds,tags, time_ind, k_ind, j_ind, i_ind,100) 
+    subset_template, inputs_test, coords_test, char_test, lb_test = make_nninputs(ds,tags, time_ind, k_ind, j_ind, i_ind,100,0) 
 print('testing dataset is processed!')
 
 a = 6371*1000 # radius of the Earth
+
+### WITHOUT TS, used for saved-models/model-complexity, -depth, -gamma, gamma-1, and -training
 
 class PhysicsInformedNN:
     # Initialize the class
@@ -272,9 +286,9 @@ class PhysicsInformedNN:
         # self.Kz = tf.Variable(initial_value=tf.random.normal(shape=self.i_c.shape,mean=1e-5,stddev=1e-6), dtype=tf.float32)
         # self.Ky = tf.Variable(initial_value=tf.random.normal(shape=self.i_c.shape,mean=1e3,stddev=10), dtype=tf.float32)
         # self.Kx = tf.Variable(initial_value=tf.random.normal(shape=self.i_c.shape,mean=1e3,stddev=10), dtype=tf.float32)
-        self.Kz = tf.constant([1e-5], dtype=tf.float32)
-        self.Ky = tf.constant([1e3], dtype=tf.float32)
-        self.Kx = tf.constant([1e3], dtype=tf.float32)
+        self.Kz = tf.Variable([1e-5], dtype=tf.float32)
+        self.Ky = tf.Variable([1e3], dtype=tf.float32)
+        self.Kx = tf.Variable([1e3], dtype=tf.float32)
         
         # unconstrained w placeholder
         # self.w_test = tf.Variable(initial_value=tf.zeros_like(self.i_c,dtype=tf.float32), std_dev=1e-5)
@@ -295,14 +309,14 @@ class PhysicsInformedNN:
         self.fT_pred = tf.reduce_mean(tf.square(self.fT_pred))
         self.fS_pred = tf.reduce_mean(tf.square(self.fS_pred)) 
         
-        # self.diffloss = tf.math.maximum(-1*self.Kx,0) + tf.math.maximum(-1*self.Ky,0) + tf.math.maximum(-1*self.Kz,0)
+        self.diffloss = tf.math.maximum(-1*self.Kx,0) + tf.math.maximum(-1*self.Ky,0) + tf.math.maximum(-1*self.Kz,0)
         
         self.eqloss = tf.reduce_mean(tf.square(self.fcont)) + \
                     tf.reduce_mean(tf.square(self.fz_pred)) + \
                     tf.reduce_mean(tf.square(self.fv_pred)) + \
-                    tf.reduce_mean(tf.square(self.fu_pred)) + \
-                    tf.reduce_mean(tf.square(self.fT_pred)) + \
-                    tf.reduce_mean(tf.square(self.fS_pred)) 
+                    tf.reduce_mean(tf.square(self.fu_pred)) #+ \
+                    # tf.reduce_mean(tf.square(self.fT_pred)) + \
+                    # tf.reduce_mean(tf.square(self.fS_pred)) 
 
         self.dataloss = tf.reduce_mean(tf.square(self.u_tf - self.u_pred)) + \
                     tf.reduce_mean(tf.square(self.v_tf - self.v_pred)) + \
@@ -460,10 +474,10 @@ class PhysicsInformedNN:
         fv = 1029*char_nn[2]/char_nn[9]*(char_nn[7]/char_nn[0]*v_t + char_nn[7]/char_nn[3]*u_full*v_x + char_nn[7]/char_nn[2]*v_full*v_y + char_nn[7]/char_nn[1]*w_full*v_z + f*u_full + char_nn[9]/char_nn[2]/1029*p_y)
 
         # temperature conservation
-        fT = char_nn[0]/char_nn[4]*(char_nn[4]/char_nn[0]*T_t + char_nn[4]/char_nn[3]*u_full*T_x + char_nn[4]/char_nn[2]*v_full*T_y + char_nn[4]/char_nn[1]*w_full*T_z - Kx*char_nn[4]/char_nn[3]**2*T_xx - Ky*char_nn[4]/char_nn[2]**2*T_yy - Kz*char_nn[4]/char_nn[1]**2*T_zz) 
+        fT = char_nn[3]/char_nn[4]*(char_nn[4]/char_nn[0]*T_t + char_nn[4]/char_nn[3]*u_full*T_x + char_nn[4]/char_nn[2]*v_full*T_y + char_nn[4]/char_nn[1]*w_full*T_z - Kx*char_nn[4]/char_nn[3]**2*T_xx - Ky*char_nn[4]/char_nn[2]**2*T_yy - Kz*char_nn[4]/char_nn[1]**2*T_zz) 
         
         # salinity conservation
-        fS = char_nn[0]/char_nn[5]*(char_nn[5]/char_nn[0]*T_t + char_nn[5]/char_nn[3]*u_full*S_x + char_nn[5]/char_nn[2]*v_full*S_y + char_nn[5]/char_nn[1]*w_full*S_z - Kx*char_nn[5]/char_nn[3]**2*S_xx - Ky*char_nn[5]/char_nn[2]**2*S_yy - Kz*char_nn[5]/char_nn[1]**2*S_zz) 
+        fS = char_nn[3]/char_nn[5]*(char_nn[5]/char_nn[0]*T_t + char_nn[5]/char_nn[3]*u_full*S_x + char_nn[5]/char_nn[2]*v_full*S_y + char_nn[5]/char_nn[1]*w_full*S_z - Kx*char_nn[5]/char_nn[3]**2*S_xx - Ky*char_nn[5]/char_nn[2]**2*S_yy - Kz*char_nn[5]/char_nn[1]**2*S_zz) 
         
         del tape, tape2
         
@@ -536,7 +550,7 @@ class PhysicsInformedNN:
                 # Ky_value = self.sess.run(self.Ky, tf_dict)
                 # Kx_value = self.sess.run(self.Kx, tf_dict)
                 # w_value = self.sess.run(self.w_diff, tf_dict)
-                fS_value = self.sess.run(self.fS_pred, tf_dict)
+                # fS_value = self.sess.run(self.fS_pred, tf_dict)
                 elapsed = time.time() - start_time
                 
                 # print('Adam It: %d, Total loss: %.3e, Data loss: %.3e, Eq loss: %.3e, Val loss: %.3e, T loss: %.3e, S loss: %.3e, Time: %.2f' % 
@@ -631,9 +645,10 @@ class PhysicsInformedNN:
     def save_model(self, save_path):
         self.saver.save(self.sess, save_path)
         print('model saved!')
-    
+        
+
 with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-    _, inputs_train, coords_train, char_train, lb_train = make_nninputs(ds,tags, time_ind, k_ind, j_ind, i_ind, training_input)
+    _, inputs_train, coords_train, char_train, lb_train = make_nninputs(ds,tags, time_ind, k_ind, j_ind, i_ind, 5, 0)
 
 inputs_val, coords_val, inputs_train, coords_train = split_nninputs(inputs_train, coords_train)
 
@@ -665,8 +680,8 @@ if __name__ == "__main__":
     losses, eq_losses, data_losses, val_losses, temp_losses, salt_losses, eq_res, u_t, uu_x, vu_y, wu_z, fv, p_x, u_predictions = model.train(nIter)  # original niter is 200000
 
     ## SAVING THE MODEL
-    ckpt_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/model-gamma-"+str(training_input)+"-TS/latlon_k2037_j4070_i4070_iter16000_layer20_gamma"+str(int(100*gamma_input))+"_run"+str(run_input)+".ckpt"
-    array_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/model-gamma-"+str(training_input)+"-TS/latlon_k2037_j4070_i4070_iter16000_layer20_gamma"+str(int(100*gamma_input))+"_run"+str(run_input)+".npz"
+    ckpt_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/model-gamma-"+str(train_input)+"-new2/latlon_k2037_j4070_i4070_iter16000_layer20_gamma"+str(int(100*gamma_input))+"_run"+str(run_input)+".ckpt"
+    array_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/model-gamma-"+str(train_input)+"-new2/latlon_k2037_j4070_i4070_iter16000_layer20_gamma"+str(int(100*gamma_input))+"_run"+str(run_input)+".npz"
 
     model.save_model(ckpt_file)
     np.savez(array_file, inputs_train=inputs_train, char_train=char_train, lb_train=lb_train, f_test = f_test, inputs_val = inputs_val, coords_val = coords_val, inputs_test = inputs_test, char_test = char_test, lb_test = lb_test, subset_template = subset_template, layers=layers, coords_test=coords_test, data_losses=data_losses, eq_losses=eq_losses, val_losses = val_losses, losses=losses, eq_res=eq_res, u_t=u_t, uu_x=uu_x, vu_y=vu_y, wu_z=wu_z, fv=fv, p_x=p_x, u_predictions=u_predictions)
