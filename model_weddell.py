@@ -43,8 +43,8 @@ from scipy.interpolate import LinearNDInterpolator
 # run_input = args.run
 # train_input = args.training
 
-np.random.seed(1511)
-tf.set_random_seed(1511)
+np.random.seed(10297)
+tf.set_random_seed(10297)
 
 # LOADING IN ECCO GRID + DATA
 
@@ -67,7 +67,7 @@ xgcm_grid = ecco.get_llc_grid(ecco_grid)
 # interpolate w velocity onto regular grid
 WVELMASS_interp = xgcm_grid.interp(ds.WVELMASS, "Z", boundary='fill')
 # adjusting the pressure anomaly to not be 1/rho
-PHI = ds.PHIHYD*(ds.RHOAnoma+1029) # rho_const = 1029
+PHI = ds.PHIHYD*(1029) # rho_const = 1029
 # creating land mask
 maskC = ds.SALT.where(np.logical_or(ds.SALT.isnull(), ds.SALT==0),1).isel(time=0)
 
@@ -680,8 +680,8 @@ if __name__ == "__main__":
     losses, eq_losses, data_losses, val_losses, temp_losses, salt_losses, eq_res, u_t, uu_x, vu_y, wu_z, fv, p_x, u_predictions = model.train(nIter)  # original niter is 200000
 
     ## SAVING THE MODEL
-    ckpt_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/mega-runs/latlon_k2037_j3565_i270300_iter150000_layer20_gamma10_weddell2.ckpt"
-    array_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/mega-runs/latlon_k2037_j3565_i270300_iter150000_layer20_gamma10_weddell2.npz"
+    ckpt_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/mega-runs/latlon_k2037_j3565_i270300_iter150000_layer20_gamma10_weddell3.ckpt"
+    array_file = "/scratch/gpfs/wc4720/SOCCOM/saved-models/mega-runs/latlon_k2037_j3565_i270300_iter150000_layer20_gamma10_weddell3.npz"
 
     model.save_model(ckpt_file)
     np.savez(array_file, inputs_train=inputs_train, char_train=char_train, lb_train=lb_train, f_test = f_test, inputs_val = inputs_val, coords_val = coords_val, inputs_test = inputs_test, char_test = char_test, lb_test = lb_test, subset_template = subset_template, layers=layers, coords_test=coords_test, data_losses=data_losses, eq_losses=eq_losses, val_losses = val_losses, losses=losses, eq_res=eq_res, u_t=u_t, uu_x=uu_x, vu_y=vu_y, wu_z=wu_z, fv=fv, p_x=p_x, u_predictions=u_predictions)
